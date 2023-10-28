@@ -15,16 +15,13 @@
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
-#define FLAG 0x7E
-#define ADDR_Tx 0x03
-#define ADDR_Rx 0x03
 
-typedef enum states{
-    Start, FLAG_RCV, A_RCV, BCC_RCV, C_RCV, STATE_STOP
-};
+
 int alarmEnabled = FALSE;
 int alarmCount = 0;
+int maxNRetransmissions = 0;
 
+// Alarm handler
 void alarmHandler(int signal)
 {
     alarmEnabled = FALSE;
@@ -32,13 +29,18 @@ void alarmHandler(int signal)
 
     printf("Alarm #%d\n", alarmCount);
 }
-////////////////////////////////////////////////
-// LLOPEN
-////////////////////////////////////////////////
 
+int sendTrama(int fd, unsigned char Address, unsigned char Control){
+    unsigned char BUFFER[5] = {FLAG, Address, Control, Address ^ Control, FLAG};
+    return write(fd, BUFFER, 5);
+}
+
+// llopen function
 int llopen(LinkLayer connectionParameters)
 {
-    enum states state = Start;  
+    unsigned char read_buffer[5] = {0};
+    maxNRetransmissions = connectionParameters.nRetransmissions;
+    states state = START;  
     int fd = open(connectionParameters.serialPort, O_RDWR | O_NOCTTY);
 
     if (fd < 0)
@@ -74,80 +76,76 @@ int llopen(LinkLayer connectionParameters)
     if (tcsetattr(fd, TCSANOW, &newtio) == -1)
     {
         perror("tcsetattr");
-        exit(-1);
+        return -1;
     }
 
-   
-    unsigned char buffer[5] = {0};
+    //State Machine
     switch (connectionParameters.role)
     {
-    case LlTx:
+    case LlTx: // Transmitter
         (void)signal(SIGALRM, alarmHandler);
-       
-        while((alarmCount < connectionParameters.nRetransmissions) && (state != STATE_STOP)){
-        int bytes = write(fd, buf, BUF_SIZE);
-        alarm(connectionParameters.timeout);
+    
+        while((alarmCount < maxNRetransmissions) && (state != STATE_STOP)){
+        sendTrama(fd, ADDR_Tx, CTRL_SET);
+        alarm(connectionParameters.timeout); // Activates alarm during timeout seconds
         alarmEnabled = TRUE;
-        printf("%d bytes written\n", bytes);
 
     //Read the UA
         while((state != STATE_STOP) && (alarmEnabled == TRUE)){
-            int b1 = read(fd,buffer,1);
-
-            if(b1 > 0){
-                printf("var = 0x%02X\n", buf[0]);
+            int b1 = read(fd,read_buffer,1); //Reads one byte
+            if(b1 > 0){ //If read was successful
+                printf("var = 0x%02X\n", read_buffer[0]);
             }
             else{
                 continue;
             }
-            printf("%d\n",state);
             switch(state){
-                case Start:  
-                    if(buf[0] == 0x7E){
+                case START:  
+                    if(read_buffer[0] == FLAG){
                         state = FLAG_RCV;
                     }
                     break;
                 case FLAG_RCV:
-                    if(buf[0] == 0x7E){
+                    if(read_buffer[0] == FLAG){
                         state = FLAG_RCV;
                     }
-                    else if (buf[0] == 0x03){
+                    else if (read_buffer[0] == ADDR_Tx){
                         state = A_RCV;
                     }
                     else{
-                        state = Start;
+                        state = START;
                     }
                     break;
                 case A_RCV:
-                    if(buf[0] == 0x7E){
+                    if(read_buffer[0] == FLAG){
                         state = FLAG_RCV;
                     }
-                    else if(buf[0] == 0x07){
+                    else if(read_buffer[0] == CTRL_UA){
                         state = C_RCV;
                     }
                     else{
-                        state = Start;
+                        state = START;
                     }
                     break;
                 case C_RCV:
-                    if(buf[0] == 0x7E){
+                    if(read_buffer[0] == FLAG){
                         state = FLAG_RCV;
                     }
-                    else if (buf[0] == 0x03 ^ 0x07){
+                    else if (read_buffer[0] == ADDR_Tx ^ CTRL_UA){
                         state =  BCC_RCV;
                     }  
                     else{
-                        state = Start;
+                        state = START;
                     }
                     break;
                 case BCC_RCV:
-                    if(buf[0] == 0x7E){
+                    if(read_buffer[0] == FLAG){
                         state = STATE_STOP;
                         alarm(0);
                         alarmEnabled = 0;
                     }
                     else{
-                        state = Start;
+                        state = START;
                     }
                 default:
                     printf("%d",state);
@@ -155,14 +153,76 @@ int llopen(LinkLayer connectionParameters)
 
         }
     }
-        break;
+    break;
    
-    case LlRx:
-       
-        break;
-    }
+    case LlRx: // Receiver    
+        //Read the SET
+        while(state != STATE_STOP){
+            int b1 = read(fd,read_buffer,1);
+            if(b1 > 0){
+                printf("var = 0x%02X\n", read_buffer[0]);
+            }
+            else{
+                continue;
+            }
+            switch(state){
+                case START:  
+                    if(read_buffer[0] == FLAG){
+                        state = FLAG_RCV;
+                    }
+                    break;
+                case FLAG_RCV:
+                    if(read_buffer[0] == FLAG){
+                        state = FLAG_RCV;
+                    }
+                    else if (read_buffer[0] == ADDR_Tx){
+                        state = A_RCV;
+                    }
+                    else{
+                        state = START;
+                    }
+                    break;
+                case A_RCV:
+                    if(read_buffer[0] == FLAG){
+                        state = FLAG_RCV;
+                    }
+                    else if(read_buffer[0] == CTRL_SET){
+                        state = C_RCV;
+                    }
+                    else{
+                        state = START;
+                    }
+                    break;
+                case C_RCV:
+                    if(read_buffer[0] == FLAG){
+                        state = FLAG_RCV;
+                    }
+                    else if (read_buffer[0] == ADDR_Tx ^ CTRL_SET){
+                        state =  BCC_RCV;
+                    }  
+                    else{
+                        state = START;
+                    }
+                    break;
+                case BCC_RCV:
+                    if(read_buffer[0] == FLAG){
+                        state = STATE_STOP;
+                    }
+                    else{
+                        state = START;
+                    }
+                default:
+                    printf("%d",state);
+            }
 
-    return 1;
+        }
+        sendTrama(fd, ADDR_Tx, CTRL_UA);
+        break;
+
+        default: // Error
+            return -1;
+    }
+    return fd;
 }
 
 ////////////////////////////////////////////////
@@ -194,3 +254,4 @@ int llclose(int showStatistics)
 
     return 1;
 }
+
