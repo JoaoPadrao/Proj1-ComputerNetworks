@@ -48,6 +48,8 @@ typedef enum
 #define CTRL_REJ1 0x81
 #define ESC       0x7D
 #define ESC_FLAG  0x5E
+#define XOR_STUFFING  0x20
+#define N(s)      ((s) << 6) 
 
 
 // Open a connection using the "port" parameters defined in struct linkLayer.
