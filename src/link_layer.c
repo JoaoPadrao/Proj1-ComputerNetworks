@@ -67,7 +67,7 @@ int getResponse(){
                         if(response_buffer == FLAG){
                             state = FLAG_RCV;
                         }
-                         if(response_buffer == CTRL_REJ0 || response_buffer == CTRL_REJ1 || response_buffer == CTRL_RR0 || response_buffer == CTRL_RR1 || CTRL_DISC){
+                         if(response_buffer == CTRL_REJ0 || response_buffer == CTRL_REJ1 || response_buffer == CTRL_RR0 || response_buffer == CTRL_RR1){
                             state = C_RCV;
                             ctrl_field = response_buffer;
                         }
@@ -324,12 +324,11 @@ int llwrite(const unsigned char *buf, int bufSize)
     {
         if (buf[i] == FLAG || buf[i] == ESC)
         {
-            frameSize += 2; // Increase frame size by 2
-            frame = realloc(frame, frameSize); 
+            frame = realloc(frame, ++frameSize); // Increase frame size by 1 because we need to add the ESC byte
             frame[frameIndex++] = ESC;
             frame[frameIndex++] = buf[i] ^ XOR_STUFFING; // We add the ESC and after XOR between the byte and 0x20
         }
-        else
+        else 
         {
             frame[frameIndex++] = buf[i];
         }
@@ -368,6 +367,7 @@ int llwrite(const unsigned char *buf, int bufSize)
         if(accepted) break;
         transmissionsCounter++;
     }
+    alarm(0);
     free(frame);
     if(accepted){
         return frameSize; // Return the number of bytes written
@@ -393,7 +393,89 @@ int llread(unsigned char *packet)
 ////////////////////////////////////////////////
 int llclose(int showStatistics)
 {
-    // TODO
+    enum states state = START;
+    unsigned char read_buffer[5] = {0};
+    (void) signal(SIGALRM, alarmHandler);
+
+    
+    while((alarmCount < maxNRetransmissions) && (state != STATE_STOP)){
+        //Send first DISC to receiver
+        sendTrama(fd, ADDR_Tx, CTRL_DISC);
+        alarm(connectionParameters.timeout); // Activates alarm during timeout seconds
+        alarmEnabled = TRUE;
+        
+       //Read the DISC that was sent back
+        while((state != STATE_STOP) && (alarmEnabled == TRUE)){
+            int b1 = read(fd,read_buffer,1); //Reads one byte
+            if(b1 > 0){ //If read was successful
+                printf("var = 0x%02X\n", read_buffer[0]);
+            }
+            else{
+                continue;
+            }
+            switch(state){
+                case START:  
+                    if(read_buffer[0] == FLAG){
+                        state = FLAG_RCV;
+                    }
+                    break;
+                case FLAG_RCV:
+                    if(read_buffer[0] == FLAG){
+                        state = FLAG_RCV;
+                    }
+                    else if (read_buffer[0] == ADDR_Rx){
+                        state = A_RCV;
+                    }
+                    else{
+                        state = START;
+                    }
+                    break;
+                case A_RCV:
+                    if(read_buffer[0] == FLAG){
+                        state = FLAG_RCV;
+                    }
+                    else if(read_buffer[0] == CTRL_DISC){
+                        state = C_RCV;
+                    }
+                    else{
+                        state = START;
+                    }
+                    break;
+                case C_RCV:
+                    if(read_buffer[0] == FLAG){
+                        state = FLAG_RCV;
+                    }
+                    else if (read_buffer[0] == ADDR_Rx ^ CTRL_DISC){
+                        state =  BCC_RCV;
+                    }  
+                    else{
+                        state = START;
+                    }
+                    break;
+                case BCC_RCV:
+                    if(read_buffer[0] == FLAG){
+                        state = STATE_STOP;
+                        alarm(0);
+                        alarmEnabled = 0;
+                    }
+                    else{
+                        state = START;
+                    }
+                    break;
+                default:
+                    printf("%d",state); 
+                    break;
+            }
+
+        }
+    }
+
+    if(state!=STATE_STOP){
+        printf("Error: DISC not received\n");
+        return -1;
+    }
+    //Send UA to close connection
+    sendTrama(fd, ADDR_Tx, CTRL_UA);
 
     return 1;
 }
