@@ -373,7 +373,7 @@ int llwrite(const unsigned char *buf, int bufSize)
         return frameSize; // Return the number of bytes written
     }
     else{
-        llclose(fd);
+        llclose(0);
         return -1;
     }
 }
@@ -383,9 +383,128 @@ int llwrite(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int llread(unsigned char *packet)
 {
-    // TODO
+    states state = START; //inicializa maq de estados no START
+    unsigned char control_field, byte_read;  //byte lido pela função read e byte de controlo
+    int index = 0;
 
-    return 0;
+    while(state != STATE_STOP){
+
+        if(read(fd, &byte_read, 1) > 0){
+            
+            // maq de estados
+            switch (state)
+            {
+            case START:
+                if (byte_read == FLAG) 
+                    state = FLAG_RCV;
+                break;
+
+            case FLAG_RCV:
+                if (byte_read == ADDR_Tx) //(0x03) = Comandos enviados pelo Emissor e Respostas enviadas pelo Receptor
+                    state = A_RCV;
+                else if (byte_read == FLAG) //caso em q trama é iniciada por + q 1a flag
+                    state = FLAG_RCV;
+                else
+                    state = START;
+                break;
+
+            case A_RCV:
+            //confirmar que tramas NÃO são repetidas
+                if((byte_read == C_I0 && TxInfNumber==0) || (byte_read == C_I1 && TxInfNumber==1)){
+                    state = C_RCV;
+                    control_field = byte_read;
+                }
+                else if ((byte_read == C_I0 && TxInfNumber!=0) || (byte_read == C_I1 && TxInfNumber!=1)){
+                    // Se se tratar dum duplicado, o campo de dados é descartado, mas deve fazer-se CONFIRMAÇÃO da trama com RR
+                    sendTrama(fd, ADDR_Tx, (R((TxInfNumber + 1)%2) | 0x05)); //envio de RR0 ou RR1
+                    return 0;
+                }
+                else if (byte_read == FLAG){
+                    state = FLAG_RCV; //podemos ter + que uma flag
+                }
+                else
+                    state = START;
+                break;
+                
+            case C_RCV:
+                //A XOR C -> Field to detect the occurrence of errors in the header
+                if (byte_read == (ADDR_Tx ^ control_field))
+                    state = DATA_FIELD;
+                else if (byte_read == FLAG)
+                    state = FLAG_RCV;
+                else 
+                    state = START;
+                break;
+
+            // data
+            case DATA_FIELD:
+                if (byte_read == ESC) 
+                    state = DESTUFFING;
+                else if (byte_read == FLAG){  //fim da trama
+
+                /*In the given code context, packet is an array used to store received data bytes. The code receives data bytes and stores them in packet
+                until it encounters a FLAG byte again or reaches the end of the received frame. When a FLAG byte is encountered within the received 
+                data bytes (indicating the end of the frame), the code checks for the integrity of the received data by calculating a BCC (Block Check Character).
+                The BCC is calculated by performing an XOR operation on all the bytes in the packet except the last one. To facilitate the integrity check,
+                the code temporarily terminates the string stored in packet at index i using packet[i] = '\0'. By doing so, the code can manipulate the string
+                with standard string manipulation functions like strlen() and perform the BCC calculation accurately. Once the integrity check is done, 
+                the code can either confirm the successful transmission (state = STOP) or detect an error that requires retransmission.*/
+                                    
+                    index--;
+                    unsigned char bcc2 = packet[index]; //bcc2 é o ultimo byte do packet
+                    packet[index] = '\0';
+                    unsigned char check = packet[0];
+
+                    for(int k = 1; k < index; k++){
+                        //The BCC is calculated by performing an XOR operation on all the bytes in the packet except the last one
+                        check ^= packet[k];  //D1 XOR D2 XOR D3 … XOR DN
+                    }
+
+                    if (bcc2 == check){ //Reach the end
+                                    
+                        state = STATE_STOP;
+                        //send confirmation
+                        if(TxInfNumber==0){
+                            sendTrama(fd, ADDR_Tx, CTRL_RR0);
+                        }
+                        else if(TxInfNumber==1){
+                            sendTrama(fd, ADDR_Tx, CTRL_RR1);
+                        }
+                        TxInfNumber = (TxInfNumber+1)%2; //actualiza o frame number
+                        
+                        return index; // bytes read
+
+                    }
+                    else {
+                        // houve erro nos dados, envio de supervisao  
+                        if(TxInfNumber==0){
+                            sendTrama(fd, ADDR_Tx, CTRL_REJ0);
+                        }
+                        else if(TxInfNumber==1){
+                            sendTrama(fd, ADDR_Tx, CTRL_REJ1);
+                        }
+                        return -1;
+                    }
+                }
+                else{
+                    packet[index] = byte_read;
+                    index++;
+                }              
+                break;
+
+                
+            case DESTUFFING: //DESTUFFING
+                packet[index] = byte_read ^ XOR_STUFFING; 
+                index++;
+                state = DATA_FIELD;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+
+    return -1;    
 }
 
 ////////////////////////////////////////////////

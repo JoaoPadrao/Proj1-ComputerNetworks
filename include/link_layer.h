@@ -26,31 +26,37 @@ typedef enum
     A_RCV, 
     C_RCV, 
     BCC_RCV, 
-    STATE_STOP
+    STATE_STOP,
+    DATA_FIELD,
+    DESTUFFING
 } states;
-
 // SIZE of maximum acceptable payload.
 // Maximum number of bytes that application layer should send to link layer
 #define MAX_PAYLOAD_SIZE 1000
 
 // MISC
-#define FALSE     0
-#define TRUE      1
-#define FLAG      0x7E
-#define ADDR_Tx   0x03
-#define ADDR_Rx   0x01
-#define CTRL_SET  0x03
-#define CTRL_UA   0x07
-#define CTRL_DISC 0x0B
-#define CTRL_RR0  0x05
-#define CTRL_RR1  0x85
-#define CTRL_REJ0 0x01
-#define CTRL_REJ1 0x81
-#define ESC       0x7D
-#define ESC_FLAG  0x5E
+#define FALSE         0
+#define TRUE          1
+#define FLAG          0x7E
+#define ADDR_Tx       0x03
+#define ADDR_Rx       0x01
+#define C_I0          0x00 //Information frame number 0
+#define C_I1          0x40 //Information frame number 1
+#define CTRL_SET      0x03
+#define CTRL_UA       0x07
+#define CTRL_DISC     0x0B
+#define CTRL_RR0      0x05
+#define CTRL_RR1      0x85
+#define CTRL_REJ0     0x01
+#define CTRL_REJ1     0x81
+#define ESC           0x7D
+#define ESC_FLAG      0x5E
 #define XOR_STUFFING  0x20
-#define N(s)      ((s) << 6) 
-
+#define N(s)          ((s) << 6) 
+#define R(r)          ((r) << 7)
+#define START_PACKET  0x02
+#define END_PACKET    0x03
+#define DATA_PACKET   0x01
 
 // Open a connection using the "port" parameters defined in struct linkLayer.
 // Return "1" on success or "-1" on error.
