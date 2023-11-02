@@ -8,11 +8,8 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
-#define FILE_SIZE 0
-#define FILE_NAME 1
-#define DATA_PCKT 1
-#define START_PCKT 2
-#define END_PCKT 3
+
+
 
 int sendControlPacket(const char* filename,const int control_packet,long int fileLength){
     
@@ -53,39 +50,35 @@ int sendControlPacket(const char* filename,const int control_packet,long int fil
     return 1;
 }
 
+int readControlPacket(const int control_packet,size_t * fileLength,unsigned char* packet){
 
-int readCtrlPacket(unsigned char control, unsigned char* buf, size_t* file_size, char* filename){
-    
-    int bufSize;
-    if((bufSize = llread(buf)) < 0){
-        printf("Error reading control packet\n");
-        return -1;
+    // Check control packet
+    int idx = 0;
+    if (packet[idx++] != control_packet) {
+        printf("Invalid control packet.\n");
+        return -1; 
     }
 
-    if(buf[0] != control){
-        printf("Invalid control packet\n");
-        return -1;
+    // Check file size
+    if (packet[idx++] != 0x00) { // T1 (file size)
+        printf("Invalid type file size packet.\n");
+        return -1; 
     }
 
-    int i = 1;
-    unsigned char type;
-    while(i < bufSize){
-        type = buf[i++];
-        if(type == 0){
-            printf("viu o size\n");
-            *file_size = buf[i];
-            i += sizeof(size_t);
-        }
-        else if(type == 1){
-            printf("viu o name\n");
-            *filename = buf[i];
-            i += *filename;
-        }
-        else{
-            printf("Invalid control packet type\n");
-            return -1;
-        }
+    // Get file length 
+    unsigned char fileSizeBytes = packet[idx]; // L1 (file size) 
+    unsigned char aux[fileSizeBytes];
+    memcpy(aux, packet + idx + 1, fileSizeBytes); // aux = V1 (file size)
+    *fileLength = 0;
+    for (int i = fileSizeBytes - 1; i >= 0; i--) {
+        *fileLength |= aux[i] << (8 * i); // V1 (file size)
     }
+ 
+    //Get file name
+    unsigned char fileNameLength = packet[fileSizeBytes+4]; // L2 (file name)
+    unsigned char* fileName = (unsigned char*)malloc(fileNameLength);
+    memcpy(fileName, packet + fileSizeBytes + 5, fileNameLength); // V2 (file name)
+
     return 1;
 }
 
@@ -111,123 +104,141 @@ int sendDataPacket(int dataSize,unsigned char* data){
         printf("Error sending data packet in llwrite().\n");
         return -1;
     }
+    return 0;
+}
+
+int sendFile(const char* filename){
+
+     // Open file
+    FILE* file = fopen(filename, "rb"); 
+    if (file == NULL) {
+        printf("Error opening file.\n");
+        exit(-1);
+    }
+ 
+    // Get file size (Mudar)
+    int previousFile = ftell(file); // save previous position
+    fseek(file, 0L, SEEK_END); // file pointer at end of file
+    long int fileSize = ftell(file) - previousFile; // get file length
+    fseek(file, previousFile, SEEK_SET); // go back to previous position
+
+     // Send start control packet
+    if(sendControlPacket(filename, START_PACKET, fileSize) < 0){
+        printf("Error sending start control packet.\n");
+        return -1;
+    }
+
+    // Send file
+    unsigned char* data = (unsigned char*)malloc(MAX_PAYLOAD_SIZE-3); // -3 because of the header (C, L2, L1)
+    int chunkDataSize;
+    while((chunkDataSize = fread(data, 1, MAX_PAYLOAD_SIZE-3, file)) > 0){
+        if(sendDataPacket(chunkDataSize,data) < 0){
+            printf("Error sending data packet.\n");
+            return -1;
+        }
+    }   
+    free(data);
+    fclose(file);
+
+    // Send end control packet
+    if(sendControlPacket(filename, END_PACKET, fileSize) < 0){
+        printf("Error sending end control packet.\n");
+        return -1;
+    }
+    printf("Sent end packet.\n");
+
+    // Close connection
+    if (llclose(0) < 0) {
+        printf("Error send closing connection.\n");
+        return -1;
+    }
+
     return 1;
 }
+
+
+int receiveFile(const char* filename){
+    size_t packetSize;
+
+    unsigned char* packet = (unsigned char*)malloc(MAX_PAYLOAD_SIZE);
+    if(llread(packet) < 0){
+        printf("Error receiving start control packet.\n");
+        return -1;
+    }
+
+    // Read start control packet
+    if(readControlPacket(START_PACKET, &packetSize, packet) < 0){
+        printf("Error reading start control packet.\n");
+        return -1;
+    }
+
+
+    FILE* receiveFile = fopen((char *) filename, "wb+");
+
+    if(receiveFile == NULL){
+        printf("Error opening received file.\n");
+        exit(-1);
+    }
+
+    // Receive file
+    free(packet);
+    int dataSize = 0;
+     while((dataSize = llread(packet)) >= 0){
+        if(packet[0] == DATA_PACKET){
+            printf("Data packet received.\n");
+            fwrite(packet + 3, 1, dataSize - 3, receiveFile);
+            }
+        else if(packet[0] == END_PACKET){
+                printf("End packet received.\n");
+                break;  
+            }
+        }
+    free(packet);
+    fclose(receiveFile);
+    printf("Before closing connection.\n");
+    if(llclose(0) < 0){
+        printf("Error receive closing connection.\n");
+        return -1;
+    }   
+    return 1;
+}
+
 
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename){
 
-    LinkLayer linkLayer;
-    strcpy(linkLayer.serialPort,serialPort);
-    if(strcmp(role,"tx") == 0) linkLayer.role = LlTx;
-    else if(strcmp(role,"rx") == 0) linkLayer.role = LlRx;
+    // Create connection parameters
+    LinkLayer connectionParameters;
+    connectionParameters.baudRate = baudRate;
+    connectionParameters.nRetransmissions = nTries;
+    connectionParameters.timeout = timeout;
+    strcpy(connectionParameters.serialPort, serialPort);
+    if (strcmp(role, "tx") == 0) connectionParameters.role = LlTx;
+    else if (strcmp(role, "rx") == 0) connectionParameters.role = LlRx;
     else printf("Invalid role\n");
-    linkLayer.baudRate = baudRate;
-    linkLayer.nRetransmissions = nTries;
-    linkLayer.timeout = timeout;
-    if(llopen(linkLayer) < 0){
-        printf("Connection error\n");
+
+    // Establish connection 
+    int fd = llopen(connectionParameters);
+    if (fd < 0) {
+        printf("Error opening serial port.\n");
+        exit(-1);
     }
 
-    switch (linkLayer.role){
-        case LlRx:{
-            size_t packetSize;
-            char receivedFilename[0xff];
-            unsigned char* buf = (unsigned char*)malloc(MAX_PAYLOAD_SIZE);
-            printf("antes de ler start packet\n");
-
-            if(readCtrlPacket(START_PCKT, buf, &packetSize, receivedFilename) < 0){
-                printf("Error readind control file");
+    // Send / receive file 
+    switch (connectionParameters.role){
+        case LlTx:
+            if(sendFile(filename) < 0){
+                printf("Error sending file.\n");
                 exit(-1);
             }
-
-            printf("depois do read control packet\n");
-
-            FILE* fileOut = fopen((char *) filename, "wb+");
-
-            if(fileOut == NULL){
-                printf("Error opening file.\n");
-                exit(-1);
-            }
-
-            printf("abre o file\n");
-            free(buf);
-            int dataSize;
-            while((dataSize = llread(buf)) >= 0){
-
-                if(buf[0] == END_PCKT){
-                    printf("recebeu packet final\n");
-                    break;
-                }
-                else{
-                    printf("esta a escrever no file\n");
-                    fwrite(buf+3, 1, buf[1] * 256 + buf[2], fileOut);
-                }
-            }
-            free(buf);
-            fclose(fileOut);
-            printf("fecha o file\n");
-            printf("antes do llclose\n");
-            if(llclose(FALSE) < 0) exit(-1);
-            printf("depois do llclose\n");
             break;
-            }
-        case LlTx:{
-            FILE* file = fopen(filename, "rb");
-            if(file == NULL){
-                printf("Couldn't read file");
+        case LlRx:
+             if(receiveFile(filename) < 0){
+                printf("Error sending file.\n");
                 exit(-1);
             }
-
-            int prev = ftell(file);
-            fseek(file, 0L, SEEK_END);
-            long int fileSize = ftell(file) - prev;
-            fseek(file, prev, SEEK_SET);
-            printf("antes enviar start packet\n");
-
-            if(sendControlPacket(filename,START_PCKT,fileSize) == -1){
-                printf("Error sending control packet\n");
-                exit(-1);
-            }
-            /*
-            if(sendCtrlPacket(START_PCKT, filename, fileSize) == -1){
-                printf("Error sending control packet\n");
-                exit(-1);
-            };
-            */
-            printf("depois de enviar start packet\n");
-
-            unsigned char* buf = (unsigned char*)malloc(MAX_PAYLOAD_SIZE-3);
-
-            int dataSize;
-            while((dataSize = fread(buf, 1, MAX_PAYLOAD_SIZE-3, file)) > 0){
-                
-                if(sendDataPacket(dataSize,buf)){
-                    exit(-1);
-                };
-            }
-            fclose(file);
-
-            printf("depois de enviar todos os data packet\n");
-            /*
-            if(sendCtrlPacket(END_PCKT,filename,fileSize) == -1){
-                printf("Error sending control packet\n");
-                exit(-1);
-            }
-            */      
-           if(sendControlPacket(filename,END_PCKT,fileSize) == -1){
-                printf("Error sending control packet\n");
-                exit(-1);
-            }
-            printf("depois de enviar end packet\n");
-
-            if(llclose(0) < 0) exit(-1);
-            printf("depois do llclose\n");
             break;
-            }
         default:
             break;
     }
-    
-
 }

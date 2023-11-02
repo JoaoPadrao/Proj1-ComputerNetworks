@@ -57,6 +57,7 @@ int getResponse(){
                         break;
                     case FLAG_RCV:
                         printf("FLAG_RCV\n");
+                        printf("response_buffer = 0x%02X\n", response_buffer);
                         if(response_buffer == FLAG){
                             state = FLAG_RCV;
                         }
@@ -69,6 +70,7 @@ int getResponse(){
                         break;
                     case A_RCV:
                         printf("A_RCV\n");
+                        printf("response_buffer = 0x%02X\n", response_buffer);
                         if(response_buffer == FLAG){
                             state = FLAG_RCV;
                         }
