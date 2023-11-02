@@ -40,6 +40,47 @@ int sendTrama(int fd, unsigned char Address, unsigned char Control){
     return write(fd, BUFFER, 5);
 }
 
+int connectSerialPort(char serialPort[50]){
+
+    fd = open(serialPort, O_RDWR | O_NOCTTY);
+
+    if (fd < 0){
+        perror(serialPort);
+        return -1;
+    }
+
+    struct termios oldtio;
+    struct termios newtio;
+
+    // Save current port settings
+    if(tcgetattr(fd, &oldtio) == -1){
+        perror("tcgettattr");
+        return -1;
+    }
+
+    // Clean the struct
+    memset(&newtio, 0, sizeof(newtio));
+
+    newtio.c_cflag = BAUDRATE | CS8 | CLOCAL | CREAD;
+    newtio.c_iflag = IGNPAR;
+    newtio.c_oflag = 0;
+
+    // Set input mode
+    newtio.c_lflag = 0;
+    newtio.c_cc[VTIME] = 5;
+    newtio.c_cc[VMIN] = 0;
+
+    tcflush(fd, TCIOFLUSH);
+
+    if(tcsetattr(fd, TCSANOW, &newtio) == -1){
+        perror("tcsettattr");
+        return -1;
+    }
+
+    return 1;
+}
+
+
 int getResponse(){
     unsigned char response_buffer;
     unsigned char ctrl_field;
@@ -118,42 +159,8 @@ int llopen(LinkLayer connectionParameters)
     maxNRetransmissions = connectionParameters.nRetransmissions;
     timeout = connectionParameters.timeout;
     states state = START;  
-    fd = open(connectionParameters.serialPort, O_RDWR | O_NOCTTY);
-
-    if (fd < 0)
-    {
-        perror(connectionParameters.serialPort);
+    if(connectSerialPort(connectionParameters.serialPort) < 0 || fd <0)
         return -1;
-    }
-
-    
-
-    // Save current port settings
-    if (tcgetattr(fd, &oldtio) == -1)
-    {
-        perror("tcgetattr");
-        exit(-1);
-    }
-
-    // Clear struct for new port settings
-    memset(&newtio, 0, sizeof(newtio));
-
-    newtio.c_cflag = connectionParameters.baudRate | CS8 | CLOCAL | CREAD;
-    newtio.c_iflag = IGNPAR;
-    newtio.c_oflag = 0;
-
-    newtio.c_lflag = 0;
-    newtio.c_cc[VTIME] = 0;
-    newtio.c_cc[VMIN] = 0;
-   
-    tcflush(fd, TCIOFLUSH);
-
-    // Set new port settings
-    if (tcsetattr(fd, TCSANOW, &newtio) == -1)
-    {
-        perror("tcsetattr");
-        return -1;
-    }
 
     //State Machine
     switch (connectionParameters.role)
@@ -613,6 +620,7 @@ int llclose(int showStatistics)
     }
     //Send UA to close connection
     sendTrama(fd, ADDR_Tx, CTRL_UA);
+    tcsetattr(fd,TCSANOW,&oldtio);
 
     return 1;
 }

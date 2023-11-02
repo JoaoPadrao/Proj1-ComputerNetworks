@@ -32,6 +32,7 @@ typedef enum
 } states;
 // SIZE of maximum acceptable payload.
 // Maximum number of bytes that application layer should send to link layer
+#define BAUDRATE 38400
 #define MAX_PAYLOAD_SIZE 1000
 
 // MISC
