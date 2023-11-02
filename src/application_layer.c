@@ -3,6 +3,8 @@
 #include "application_layer.h"
 #include "link_layer.h"
 #include <stdio.h> 
+#include <stdlib.h>
+#include <string.h>
 
 
 int sendDataPacket(int dataSize,unsigned char* data){
@@ -14,9 +16,9 @@ int sendDataPacket(int dataSize,unsigned char* data){
     // Fill data packet
     int idx = 0;
     dataPacket[idx++] = DATA_PACKET; // T1 (data)
-    // K = 256 * L2 + L1
-    dataPacket[idx++] = dataSize / 256; // L2 (data)
-    dataPacket[idx++] = dataSize % 256; // L1 (data)
+    // K = 256 * L2 + L1   
+    dataPacket[idx++] = dataSize / 256; // L2 (data)  
+    dataPacket[idx++] = dataSize % 256; // L1 (data) 
     for (int i = 0; i < dataSize; i++) {
         dataPacket[idx++] = data[i]; // P (data)
     }
@@ -28,20 +30,22 @@ int sendDataPacket(int dataSize,unsigned char* data){
     }
     return 1;
 }
-int readControlPacket(const int control_packet,unsigned long int* fileLength,unsigned char* packet){
+
+
+unsigned char * readControlPacket(const int control_packet,unsigned long int* fileLength,unsigned char* packet){
 
     // Check control packet
     int idx = 0;
     if (packet[idx++] != control_packet) {
         printf("Invalid control packet.\n");
-        return -1;  
+        return NULL; 
     }
 
     //Skip T1
     idx = 2;
 
     // Get file length (nao sei se está correto)
-    unsigned char fileSizeBytes = packet[idx]; // L1 (file size)
+    unsigned char fileSizeBytes = packet[idx]; // L1 (file size) 
     unsigned char aux[fileSizeBytes];
     memcpy(aux, packet + idx + 1, fileSizeBytes); // aux = V1 (file size)
     *fileLength = 0;
@@ -75,7 +79,8 @@ int sendControlPacket(const char* filename,const int control_packet,long int fil
     // Fill control packet
     int idx = 0;
     controlPacket[idx++] = control_packet;
-    //File size
+
+    //File size 
     controlPacket[idx++] = 0x00; // T1 (file size)
     controlPacket[idx++] = fileLengthL1; // L1 (file size)
     for (int i = fileLengthL1 - 1; i >= 0; i--) {
@@ -99,7 +104,7 @@ int sendControlPacket(const char* filename,const int control_packet,long int fil
 int sendFile(const char *filename){
 
     // Open file
-    FILE* file = fopen(filename, "rb");
+    FILE* file = fopen(filename, "rb"); 
     if (file == NULL) {
         printf("Error opening file.\n");
         exit(-1);
@@ -122,7 +127,7 @@ int sendFile(const char *filename){
     int chunkDataSize = 0;
     // Read file in chunks of MAX_PAYLOAD_SIZE-3 bytes and send them
     while((chunkDataSize = fread(data, 1, MAX_PAYLOAD_SIZE-3, file)) > 0){
-        if(sendDataPacket(data, chunkDataSize) < 0){
+        if(sendDataPacket(chunkDataSize,data) < 0){
             printf("Error sending data packet.\n");
             return -1;
         }
@@ -135,16 +140,16 @@ int sendFile(const char *filename){
         printf("Error sending end control packet.\n");
         return -1;
     }
-
+    printf("Enviou end packet.\n");
     // Close connection
     if (llclose(0) < 0) {
-        printf("Error closing connection.\n");
+        printf("Error send closing connection.\n");
         return -1;
     }
+    return 1;
 }
 
 int receiveFile(){
-    
         // Receive start control packet
         unsigned char* packet = (unsigned char*)malloc(MAX_PAYLOAD_SIZE);
         if(llread(packet) < 0){
@@ -153,7 +158,12 @@ int receiveFile(){
         }
         unsigned long int receiveFileSize = 0;
         unsigned char* name = readControlPacket(START_PACKET, &receiveFileSize, packet);
-
+        
+        if (name == NULL) {
+            printf("Error reading start control packet.\n");
+            return -1;
+        }
+        
         FILE* receiveFile = fopen((char *) name, "wb+");
         if (receiveFile == NULL) {
             printf("Error opening received file.\n");
@@ -169,13 +179,14 @@ int receiveFile(){
             }
             else if(packet[0] == END_PACKET){
                 printf("End packet received.\n");
-                break;
+                break;  
             }
         }
         fclose(receiveFile);
         free(packet);
+        printf("Before closing connection.\n");
         if(llclose(0) < 0){
-            printf("Error closing connection.\n");
+            printf("Error receive closing connection.\n");
             return -1;
         }
         return 1;

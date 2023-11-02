@@ -16,14 +16,15 @@
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
 
-
+struct termios oldtio;
+struct termios newtio;
 int alarmEnabled = FALSE;
 int alarmCount = 0;
 int maxNRetransmissions = 0;
 int TxInfNumber = 0;
 int RxInfNumber = 1;
 int fd;
-
+int timeout = 0;
 // Alarm handler
 void alarmHandler(int signal)
 {
@@ -42,21 +43,24 @@ int sendTrama(int fd, unsigned char Address, unsigned char Control){
 int getResponse(){
     unsigned char response_buffer;
     unsigned char ctrl_field;
-    enum states state = START;
+    states state = START;
+    printf("in getResponse\n");
      while(state != STATE_STOP){
             int b1 = read(fd,&response_buffer,1);
             if(b1 > 0){ //If read was successful
                 switch(state){
                     case START:  
+                        printf("START\n");
                         if(response_buffer == FLAG){
                             state = FLAG_RCV;
                         }
                         break;
                     case FLAG_RCV:
-                        if(response_buffer[0] == FLAG){
+                        printf("FLAG_RCV\n");
+                        if(response_buffer == FLAG){
                             state = FLAG_RCV;
                         }
-                        else if (response_buffer == ADDR_Rx){
+                        else if (response_buffer == ADDR_Tx){
                             state = A_RCV;
                         }
                         else{
@@ -64,10 +68,11 @@ int getResponse(){
                         }
                         break;
                     case A_RCV:
+                        printf("A_RCV\n");
                         if(response_buffer == FLAG){
                             state = FLAG_RCV;
                         }
-                         if(response_buffer == CTRL_REJ0 || response_buffer == CTRL_REJ1 || response_buffer == CTRL_RR0 || response_buffer == CTRL_RR1){
+                         if(response_buffer == CTRL_REJ0 || response_buffer == CTRL_REJ1 || response_buffer == CTRL_RR0 || response_buffer == CTRL_RR1 || response_buffer == CTRL_DISC){
                             state = C_RCV;
                             ctrl_field = response_buffer;
                         }
@@ -76,10 +81,11 @@ int getResponse(){
                         }
                         break;
                     case C_RCV:
+                        printf("C_RCV\n");
                         if(response_buffer == FLAG){
                             state = FLAG_RCV;
                         }
-                        else if (response_buffer == ADDR_Rx ^ ctrl_field){
+                        else if (response_buffer == (ADDR_Tx ^ ctrl_field)){
                             state =  BCC_RCV;
                         }  
                         else{
@@ -108,6 +114,7 @@ int llopen(LinkLayer connectionParameters)
 {
     unsigned char read_buffer[5] = {0};
     maxNRetransmissions = connectionParameters.nRetransmissions;
+    timeout = connectionParameters.timeout;
     states state = START;  
     fd = open(connectionParameters.serialPort, O_RDWR | O_NOCTTY);
 
@@ -117,8 +124,7 @@ int llopen(LinkLayer connectionParameters)
         return -1;
     }
 
-    struct termios oldtio;
-    struct termios newtio;
+    
 
     // Save current port settings
     if (tcgetattr(fd, &oldtio) == -1)
@@ -151,11 +157,12 @@ int llopen(LinkLayer connectionParameters)
     switch (connectionParameters.role)
     {
     case LlTx: // Transmitter
+        printf("Vou enviar o SET\n");
         (void)signal(SIGALRM, alarmHandler);
     
         while((alarmCount < maxNRetransmissions) && (state != STATE_STOP)){
         sendTrama(fd, ADDR_Tx, CTRL_SET);
-        alarm(connectionParameters.timeout); // Activates alarm during timeout seconds
+        alarm(timeout); // Activates alarm during timeout seconds
         alarmEnabled = TRUE;
 
     //Read the UA
@@ -199,7 +206,7 @@ int llopen(LinkLayer connectionParameters)
                     if(read_buffer[0] == FLAG){
                         state = FLAG_RCV;
                     }
-                    else if (read_buffer[0] == ADDR_Rx ^ CTRL_UA){
+                    else if (read_buffer[0] == (ADDR_Rx ^ CTRL_UA)){
                         state =  BCC_RCV;
                     }  
                     else{
@@ -227,6 +234,7 @@ int llopen(LinkLayer connectionParameters)
    
     case LlRx: // Receiver    
         //Read the SET
+        printf("Vou receber o SET\n");
         while(state != STATE_STOP){
             int b1 = read(fd,read_buffer,1);
             if(b1 > 0){
@@ -267,7 +275,7 @@ int llopen(LinkLayer connectionParameters)
                     if(read_buffer[0] == FLAG){
                         state = FLAG_RCV;
                     }
-                    else if (read_buffer[0] == ADDR_Tx ^ CTRL_SET){
+                    else if (read_buffer[0] == (ADDR_Tx ^ CTRL_SET)){
                         state =  BCC_RCV;
                     }  
                     else{
@@ -288,12 +296,14 @@ int llopen(LinkLayer connectionParameters)
             }
 
         }
+        printf("Vou enviar o UA\n");
         sendTrama(fd, ADDR_Rx, CTRL_UA);
         break;
 
         default: // Error
             return -1;
     }
+    printf("Vou retornar o fd\n");
     return fd;
 }
 
@@ -302,6 +312,7 @@ int llopen(LinkLayer connectionParameters)
 ////////////////////////////////////////////////
 int llwrite(const unsigned char *buf, int bufSize)
 {
+    printf("in llwrite\n");
     int frameSize = 6 + bufSize; // 6 bytes are the fixed size of the frame
 
     // Create frame
@@ -344,15 +355,18 @@ int llwrite(const unsigned char *buf, int bufSize)
 
     //Loop to send the frame
     while(transmissionsCounter < maxNRetransmissions){
+        printf("Transmission #%d\n", transmissionsCounter+1);
         alarmEnabled = FALSE;
-        alarm(connectionParameters.timeout); // Activates alarm during timeout seconds
+        alarm(timeout); // Activates alarm during timeout seconds
         accepted = FALSE;
         rejected = FALSE;
         while((alarmEnabled == FALSE) && (accepted == FALSE) && (rejected == FALSE)){
             // Send frame
+            printf("Sending frame... DENTRO DO 2º WHILE\n");
             write(fd,frame, frameSize);
             // Get response
             unsigned char response = getResponse();
+            printf("Response: 0x%02X\n", response);
             if((response == CTRL_RR0) || (response == CTRL_RR1)){
                 // Response is RR0 or RR1, frame accepted 
                 accepted = TRUE;
@@ -383,6 +397,7 @@ int llwrite(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int llread(unsigned char *packet)
 {
+    printf("in llread\n");
     states state = START; //inicializa maq de estados no START
     unsigned char control_field, byte_read;  //byte lido pela função read e byte de controlo
     int index = 0;
@@ -419,6 +434,10 @@ int llread(unsigned char *packet)
                     sendTrama(fd, ADDR_Tx, (R((TxInfNumber + 1)%2) | 0x05)); //envio de RR0 ou RR1
                     return 0;
                 }
+                else if (byte_read == CTRL_DISC) {
+                    sendTrama(fd, ADDR_Tx, CTRL_DISC);
+                    return 0;
+                }  
                 else if (byte_read == FLAG){
                     state = FLAG_RCV; //podemos ter + que uma flag
                 }
@@ -441,14 +460,6 @@ int llread(unsigned char *packet)
                 if (byte_read == ESC) 
                     state = DESTUFFING;
                 else if (byte_read == FLAG){  //fim da trama
-
-                /*In the given code context, packet is an array used to store received data bytes. The code receives data bytes and stores them in packet
-                until it encounters a FLAG byte again or reaches the end of the received frame. When a FLAG byte is encountered within the received 
-                data bytes (indicating the end of the frame), the code checks for the integrity of the received data by calculating a BCC (Block Check Character).
-                The BCC is calculated by performing an XOR operation on all the bytes in the packet except the last one. To facilitate the integrity check,
-                the code temporarily terminates the string stored in packet at index i using packet[i] = '\0'. By doing so, the code can manipulate the string
-                with standard string manipulation functions like strlen() and perform the BCC calculation accurately. Once the integrity check is done, 
-                the code can either confirm the successful transmission (state = STOP) or detect an error that requires retransmission.*/
                                     
                     index--;
                     unsigned char bcc2 = packet[index]; //bcc2 é o ultimo byte do packet
@@ -512,7 +523,7 @@ int llread(unsigned char *packet)
 ////////////////////////////////////////////////
 int llclose(int showStatistics)
 {
-    enum states state = START;
+    states state = START;
     unsigned char read_buffer[5] = {0};
     (void) signal(SIGALRM, alarmHandler);
 
@@ -520,7 +531,7 @@ int llclose(int showStatistics)
     while((alarmCount < maxNRetransmissions) && (state != STATE_STOP)){
         //Send first DISC to receiver
         sendTrama(fd, ADDR_Tx, CTRL_DISC);
-        alarm(connectionParameters.timeout); // Activates alarm during timeout seconds
+        alarm(timeout); // Activates alarm during timeout seconds
         alarmEnabled = TRUE;
         
        //Read the DISC that was sent back
@@ -534,15 +545,17 @@ int llclose(int showStatistics)
             }
             switch(state){
                 case START:  
+                    printf("START CLOSE\n");
                     if(read_buffer[0] == FLAG){
                         state = FLAG_RCV;
                     }
                     break;
                 case FLAG_RCV:
+                    printf("FLAG_RCV CLOSE\n");
                     if(read_buffer[0] == FLAG){
                         state = FLAG_RCV;
                     }
-                    else if (read_buffer[0] == ADDR_Rx){
+                    else if (read_buffer[0] == ADDR_Tx){
                         state = A_RCV;
                     }
                     else{
@@ -550,6 +563,7 @@ int llclose(int showStatistics)
                     }
                     break;
                 case A_RCV:
+                    printf("A_RCV CLOSE\n");
                     if(read_buffer[0] == FLAG){
                         state = FLAG_RCV;
                     }
@@ -561,10 +575,11 @@ int llclose(int showStatistics)
                     }
                     break;
                 case C_RCV:
+                    printf("C_RCV CLOSE\n");
                     if(read_buffer[0] == FLAG){
                         state = FLAG_RCV;
                     }
-                    else if (read_buffer[0] == ADDR_Rx ^ CTRL_DISC){
+                    else if (read_buffer[0] == (ADDR_Tx ^ CTRL_DISC)){
                         state =  BCC_RCV;
                     }  
                     else{
@@ -572,6 +587,7 @@ int llclose(int showStatistics)
                     }
                     break;
                 case BCC_RCV:
+                    printf("BCC_RCV CLOSE\n");
                     if(read_buffer[0] == FLAG){
                         state = STATE_STOP;
                         alarm(0);
