@@ -30,11 +30,7 @@ typedef enum
     DATA_FIELD,
     DESTUFFING
 } states;
-// SIZE of maximum acceptable payload.
-// Maximum number of bytes that application layer should send to link layer
-#define MAX_PAYLOAD_SIZE 1000
 
-// MISC
 #define FALSE         0
 #define TRUE          1
 #define FLAG          0x7E
@@ -57,6 +53,14 @@ typedef enum
 #define START_PACKET  0x02
 #define END_PACKET    0x03
 #define DATA_PACKET   0x01
+
+// SIZE of maximum acceptable payload.
+// Maximum number of bytes that application layer should send to link layer
+#define MAX_PAYLOAD_SIZE 1000
+
+// MISC
+#define FALSE 0
+#define TRUE 1
 
 // Open a connection using the "port" parameters defined in struct linkLayer.
 // Return "1" on success or "-1" on error.

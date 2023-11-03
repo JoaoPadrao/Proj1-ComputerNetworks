@@ -219,7 +219,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
     // Establish connection 
     int fd = llopen(connectionParameters);
-    if (fd < 0) {
+    if (fd <= 0) {
         printf("Error opening serial port.\n");
         exit(-1);
     }
