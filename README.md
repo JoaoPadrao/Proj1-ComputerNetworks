@@ -1,7 +1,6 @@
 # Data Link Protocol
 
->**Project**
-><br />
+
 >Curricular Unit: [Computer Networks](https://sigarra.up.pt/feup/en/ucurr_geral.ficha_uc_view?pv_ocorrencia_id=520330)
 ><br />
 >Course: **Informatics and Computing Engineering** 
@@ -11,7 +10,7 @@
 > Evaluation: **18.3**/20
 
 
-INSTRUCTIONS FOR SERIAL PORT PROTOCOL
+## INSTRUCTIONS FOR SERIAL PORT PROTOCOL
 =====================================
 
 This folder contains the base code of the serial port protocol.
